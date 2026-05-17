@@ -1,11 +1,15 @@
 package com.example.wlr_remote_control.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,7 +23,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -36,15 +39,47 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.TextObfuscationMode
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedSecureTextField
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import com.example.wlr_remote_control.R
 import com.example.wlr_remote_control.network.WlrDtlsClient
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-private const val LEFT_BUTTON = 0x110
-private const val RIGHT_BUTTON = 0x111
-private const val BUTTON_PRESSED = 1
-private const val BUTTON_RELEASED = 0
+private enum class Button(val code: Int) {
+    LEFT_BUTTON(0x110),
+    RIGHT_BUTTON(0x111),
+}
+
+private enum class ButtonState {
+    BUTTON_RELEASED,
+    BUTTON_PRESSED,
+}
+
+private sealed interface DragSignal {
+    data class Delta(val dx: Float, val dy: Float) : DragSignal
+    data object Stop : DragSignal
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,59 +90,112 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
     var isConnected by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf("Not connected") }
+    var dragSenderJob by remember { mutableStateOf<Job?>(null) }
+    var dragSignalChannel by remember { mutableStateOf<Channel<DragSignal>?>(null) }
+
+    fun stopDragSender() {
+        dragSenderJob?.cancel()
+        dragSignalChannel?.trySend(DragSignal.Stop)
+        dragSignalChannel?.close()
+        dragSignalChannel = null
+        dragSenderJob = null
+    }
 
     DisposableEffect(Unit) {
         onDispose {
+            stopDragSender()
             dtlsClient.close()
+        }
+    }
+
+    fun sendMouseButton(button: Button, buttonState: ButtonState) {
+        scope.launch(Dispatchers.IO) {
+            val success = dtlsClient.sendMousePacket(0, 0, button.code, buttonState.ordinal)
+            if (!success) {
+                withContext(Dispatchers.Main) {
+                    isConnected = false
+                    connectionStatus = "Connection lost"
+                }
+            }
+        }
+    }
+
+    fun handleTouchpadDrag() {
+        val signalChannel = Channel<DragSignal>(capacity = Channel.UNLIMITED)
+        dragSignalChannel = signalChannel
+        dragSenderJob = scope.launch(Dispatchers.IO) {
+            var accDx = 0f
+            var accDy = 0f
+            var running = true
+            while (isActive && running) {
+                withFrameMillis { /* sync to device refresh rate */ }
+                while (true) {
+                    val signal = signalChannel.tryReceive().getOrNull() ?: break
+                    when (signal) {
+                        is DragSignal.Delta -> {
+                            accDx += signal.dx
+                            accDy += signal.dy
+                        }
+                        DragSignal.Stop -> {
+                            running = false
+                            break
+                        }
+                    }
+                }
+                val sendDx = accDx.toInt()
+                val sendDy = accDy.toInt()
+                accDx -= sendDx
+                accDy -= sendDy
+                if (running && (sendDx != 0 || sendDy != 0)) {
+                    val sent = dtlsClient.sendMousePacket(sendDx, sendDy, 0, 0)
+                    if (!sent) {
+                        withContext(Dispatchers.Main) {
+                            isConnected = false
+                            connectionStatus = "Connection lost"
+                            stopDragSender()
+                        }
+                        running = false
+                    }
+                }
+            }
         }
     }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        topBar = { TopAppBar(title = { Text("WLR Remote") }, expandedHeight = 32.dp) }
     ) { innerPadding ->
         TouchpadScreen(
             modifier = Modifier.padding(innerPadding),
             enabled = isConnected,
             status = connectionStatus,
+            onDragStart = {
+                if (!isConnected) {
+                    return@TouchpadScreen
+                }
+                stopDragSender()
+                handleTouchpadDrag()
+            },
             onDrag = { dx, dy ->
-                scope.launch(Dispatchers.IO) {
-                    val sent = dtlsClient.sendMousePacket(dx.toInt(), dy.toInt(), 0, 0)
-                    if (!sent) {
-                        isConnected = false
-                        connectionStatus = "Connection lost"
-                    }
-                }
+                dragSignalChannel?.trySend(DragSignal.Delta(dx, dy))
             },
-            onLeftClick = {
-                scope.launch(Dispatchers.IO) {
-                    val down = dtlsClient.sendMousePacket(0, 0, LEFT_BUTTON, BUTTON_PRESSED)
-                    val up = dtlsClient.sendMousePacket(0, 0, LEFT_BUTTON, BUTTON_RELEASED)
-                    if (!down || !up) {
-                        isConnected = false
-                        connectionStatus = "Connection lost"
-                    }
-                }
+            onDragStop = {
+                stopDragSender()
             },
-            onRightClick = {
-                scope.launch(Dispatchers.IO) {
-                    val down = dtlsClient.sendMousePacket(0, 0, RIGHT_BUTTON, BUTTON_PRESSED)
-                    val up = dtlsClient.sendMousePacket(0, 0, RIGHT_BUTTON, BUTTON_RELEASED)
-                    if (!down || !up) {
-                        isConnected = false
-                        connectionStatus = "Connection lost"
-                    }
-                }
-            }
+            onLeftPress = { sendMouseButton(Button.LEFT_BUTTON, ButtonState.BUTTON_PRESSED) },
+            onLeftRelease = { sendMouseButton(Button.LEFT_BUTTON, ButtonState.BUTTON_RELEASED) },
+            onRightPress = { sendMouseButton(Button.RIGHT_BUTTON, ButtonState.BUTTON_PRESSED) },
+            onRightRelease = { sendMouseButton(Button.RIGHT_BUTTON, ButtonState.BUTTON_RELEASED) },
         )
 
         if (!isConnected) {
             ConnectionDialog(
                 isConnecting = isConnecting,
+                isConnected = isConnected,
                 onConnect = { ip, port, psk ->
                     isConnecting = true
                     connectionStatus = "Connecting..."
                     scope.launch {
+                        stopDragSender()
                         val connected = dtlsClient.connect(ip, port, psk)
                         isConnected = connected
                         isConnecting = false
@@ -124,31 +212,73 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
 }
 
 @Composable
+fun PressReleaseButton(
+    onPress: () -> Unit,
+    onRelease: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> {
+                    onPress()
+                }
+                is PressInteraction.Release -> {
+                    onRelease()
+                }
+                is PressInteraction.Cancel -> {
+                    onRelease()
+                }
+            }
+        }
+    }
+
+    Button(
+        onClick = { },
+        enabled = enabled,
+        interactionSource = interactionSource,
+        modifier = modifier,
+        content = content
+    )
+}
+
+@Composable
 private fun TouchpadScreen(
     modifier: Modifier = Modifier,
     enabled: Boolean,
     status: String,
+    onDragStart: () -> Unit,
     onDrag: (Float, Float) -> Unit,
-    onLeftClick: () -> Unit,
-    onRightClick: () -> Unit
+    onDragStop: () -> Unit,
+    onLeftPress: () -> Unit,
+    onLeftRelease: () -> Unit,
+    onRightPress: () -> Unit,
+    onRightRelease: () -> Unit
 ) {
     Column(
         modifier = modifier.fillMaxSize().padding( 12.dp, 0.dp, 12.dp, 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(text = status)
+        Text(text = status, textAlign = TextAlign.Center)
 
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(32.dp))
                 .background(if (enabled) Color.DarkGray else Color.Gray)
                 .pointerInput(enabled) {
                     if (!enabled) {
                         return@pointerInput
                     }
-                    detectDragGestures { change, dragAmount ->
+                    detectDragGestures(
+                        onDragStart = { onDragStart() },
+                        onDragEnd = { onDragStop() },
+                        onDragCancel = { onDragStop() }
+                    ) { change, dragAmount ->
                         change.consume()
                         onDrag(dragAmount.x, dragAmount.y)
                     }
@@ -162,17 +292,19 @@ private fun TouchpadScreen(
         }
 
         Row(modifier = Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
+            PressReleaseButton(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 enabled = enabled,
-                onClick = onLeftClick
+                onPress = onLeftPress,
+                onRelease = onLeftRelease,
             ) {
                 Text("Left Click")
             }
-            Button(
+            PressReleaseButton(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 enabled = enabled,
-                onClick = onRightClick
+                onPress = onRightPress,
+                onRelease = onRightRelease,
             ) {
                 Text("Right Click")
             }
@@ -180,18 +312,48 @@ private fun TouchpadScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PasswordTextField(state: TextFieldState, enabled: Boolean = true) {
+    var passwordHidden by rememberSaveable { mutableStateOf(true) }
+    OutlinedSecureTextField(
+        state = state,
+        label = { Text("Password") },
+        enabled = enabled,
+        textObfuscationMode =
+            if (passwordHidden) TextObfuscationMode.RevealLastTyped else TextObfuscationMode.Visible,
+        trailingIcon = {
+            val description = if (passwordHidden) "Show password" else "Hide password"
+            TooltipBox(
+                positionProvider =
+                    TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+                tooltip = { PlainTooltip { Text(description) } },
+                state = rememberTooltipState(),
+            ) {
+                IconButton(onClick = { passwordHidden = !passwordHidden }) {
+                    val visibilityIcon = painterResource(
+                        if (passwordHidden) R.drawable.visibility_24px else R.drawable.visibility_off_24px
+                    )
+                    Icon(painter = visibilityIcon, contentDescription = description)
+                }
+            }
+        },
+    )
+}
+
 @Composable
 private fun ConnectionDialog(
     isConnecting: Boolean,
+    isConnected: Boolean,
     onConnect: (String, Int, String) -> Unit
 ) {
-    var ip by rememberSaveable { mutableStateOf("127.0.0.1") }
-    var portText by rememberSaveable { mutableStateOf("39076") }
-    var psk by rememberSaveable { mutableStateOf("") }
+    val ip = rememberTextFieldState()
+    val portText = rememberTextFieldState("39076")
+    val psk = rememberTextFieldState()
     val focusManager = LocalFocusManager.current
 
-    val port = portText.toIntOrNull()
-    val canConnect = !isConnecting && !psk.isBlank() && !ip.isBlank() && port != null
+    val port = portText.text.toString().toIntOrNull()
+    val canConnect = !isConnecting && !psk.text.isBlank() && !ip.text.isBlank() && port != null
 
     AlertDialog(
         onDismissRequest = {},
@@ -199,28 +361,46 @@ private fun ConnectionDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = ip,
-                    onValueChange = { ip = it.trim() },
-                    label = { Text("IP Address") },
-                    singleLine = true,
-                    enabled = !isConnecting
+                    state = ip,
+                    label = { Text("IP Address (v4 or v6)") },
+                    lineLimits = TextFieldLineLimits.SingleLine,
+                    enabled = !isConnecting,
+                    placeholder = { Text("e.g. 192.168.1.153") },
+                    inputTransformation = InputTransformation {
+                        val newText = asCharSequence().toString()
+                        if (newText.isBlank()) {
+                            return@InputTransformation
+                        }
+                        val isValidChar = newText.all { char ->
+                            char.isDigit() ||
+                            char == '.' ||
+                            char == ':' ||
+                            char in 'a'..'f' ||
+                            char in 'A'..'F'
+                        }
+                        if (!isValidChar || newText.length > 45) {
+                            revertAllChanges()
+                        }
+                    }
                 )
                 OutlinedTextField(
-                    value = portText,
-                    onValueChange = { portText = it.trim() },
+                    state = portText,
                     label = { Text("Port") },
-                    singleLine = true,
+                    lineLimits = TextFieldLineLimits.SingleLine,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     enabled = !isConnecting,
-                    isError = portText.isNotBlank() && port == null
+                    isError = (portText.text.isNotBlank() && port == null) || (port != null && port > 65535),
+                    inputTransformation = InputTransformation {
+                        val newText = asCharSequence().toString()
+                        if (newText.isBlank()) {
+                            return@InputTransformation
+                        }
+                        if (!newText.all { it.isDigit() }) {
+                            revertAllChanges()
+                        }
+                    },
                 )
-                OutlinedTextField(
-                    value = psk,
-                    onValueChange = { psk = it },
-                    label = { Text("Password") },
-                    singleLine = true,
-                    enabled = !isConnecting
-                )
+                PasswordTextField(state = psk, enabled = !isConnecting)
 
                 if (isConnecting) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
@@ -232,7 +412,7 @@ private fun ConnectionDialog(
                 enabled = canConnect,
                 onClick = {
                     focusManager.clearFocus()
-                    onConnect(ip, port ?: return@Button, psk)
+                    onConnect(ip.text.toString(), port ?: return@Button, psk.text.toString())
                 }
             ) {
                 Text("Connect")
