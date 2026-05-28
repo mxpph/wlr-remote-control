@@ -1,5 +1,6 @@
 package com.example.wlr_remote_control.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -107,11 +108,22 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
         dragSenderJob = null
     }
 
+    fun disconnect(status: String = "Not connected") {
+        stopDragSender()
+        dtlsClient.close()
+        isConnected = false
+        isConnecting = false
+        connectionStatus = status
+    }
+
     DisposableEffect(Unit) {
         onDispose {
-            stopDragSender()
-            dtlsClient.close()
+            disconnect()
         }
+    }
+
+    BackHandler(enabled = isConnected) {
+        disconnect("Disconnected")
     }
 
     fun sendMouseButton(button: Button, buttonState: ButtonState) {
@@ -119,8 +131,7 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
             val success = dtlsClient.sendMousePacket(0, 0, button.code, buttonState.ordinal)
             if (!success) {
                 withContext(Dispatchers.Main) {
-                    isConnected = false
-                    connectionStatus = "Connection lost"
+                    disconnect("Connection lost")
                 }
             }
         }
@@ -156,9 +167,7 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
                     val sent = dtlsClient.sendMousePacket(sendDx, sendDy, 0, 0)
                     if (!sent) {
                         withContext(Dispatchers.Main) {
-                            isConnected = false
-                            connectionStatus = "Connection lost"
-                            stopDragSender()
+                            disconnect("Connection lost")
                         }
                         running = false
                     }
@@ -353,13 +362,18 @@ private fun ConnectionDialog(
 ) {
     val psk = rememberTextFieldState()
     var showManual by rememberSaveable { mutableStateOf(false) }
+    val onBackToDiscovery = { showManual = false }
+
+    BackHandler(enabled = showManual && !isConnecting) {
+        onBackToDiscovery()
+    }
 
     if (showManual) {
         ManualConnectionDialog(
             isConnecting = isConnecting,
             psk = psk,
             onConnect = onConnect,
-            onBack = { showManual = false }
+            onBack = onBackToDiscovery
         )
     } else {
         DiscoveryConnectionDialog(
@@ -384,7 +398,7 @@ private fun DiscoveryConnectionDialog(
 
     AlertDialog(
         onDismissRequest = {},
-        title = { Text("Connect to Server") },
+        title = { Text("Connect to device") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 PasswordTextField(state = psk, enabled = !isConnecting)
@@ -448,10 +462,6 @@ private fun DiscoveredServiceRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = service.name)
-                Text(
-                    text = "${service.host}:${service.port}",
-                    color = Color.Gray,
-                )
             }
             Button(onClick = onConnect, enabled = enabled) {
                 Text("Connect")
