@@ -1,7 +1,6 @@
 package com.example.wlr_remote_control.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -15,11 +14,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -58,7 +62,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import com.example.wlr_remote_control.R
+import com.example.wlr_remote_control.network.DiscoveredService
 import com.example.wlr_remote_control.network.WlrDtlsClient
+import com.example.wlr_remote_control.network.rememberDiscoveredServices
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
@@ -190,7 +196,6 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
         if (!isConnected) {
             ConnectionDialog(
                 isConnecting = isConnecting,
-                isConnected = isConnected,
                 onConnect = { ip, port, psk ->
                     isConnecting = true
                     connectionStatus = "Connecting..."
@@ -344,12 +349,126 @@ fun PasswordTextField(state: TextFieldState, enabled: Boolean = true) {
 @Composable
 private fun ConnectionDialog(
     isConnecting: Boolean,
-    isConnected: Boolean,
     onConnect: (String, Int, String) -> Unit
+) {
+    val psk = rememberTextFieldState()
+    var showManual by rememberSaveable { mutableStateOf(false) }
+
+    if (showManual) {
+        ManualConnectionDialog(
+            isConnecting = isConnecting,
+            psk = psk,
+            onConnect = onConnect,
+            onBack = { showManual = false }
+        )
+    } else {
+        DiscoveryConnectionDialog(
+            isConnecting = isConnecting,
+            psk = psk,
+            onConnect = onConnect,
+            onManual = { showManual = true }
+        )
+    }
+}
+
+@Composable
+private fun DiscoveryConnectionDialog(
+    isConnecting: Boolean,
+    psk: TextFieldState,
+    onConnect: (String, Int, String) -> Unit,
+    onManual: () -> Unit,
+) {
+    val services = rememberDiscoveredServices()
+    val focusManager = LocalFocusManager.current
+    val canConnect = !isConnecting && !psk.text.isBlank()
+
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Connect to Server") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PasswordTextField(state = psk, enabled = !isConnecting)
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                if (services.isEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LinearProgressIndicator(modifier = Modifier.weight(1f))
+                        Text("Scanning…")
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        services.forEach { service ->
+                            DiscoveredServiceRow(
+                                service = service,
+                                enabled = canConnect,
+                                onConnect = {
+                                    focusManager.clearFocus()
+                                    onConnect(service.host, service.port, psk.text.toString())
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (isConnecting) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            OutlinedButton(onClick = onManual, enabled = !isConnecting) {
+                Text("Manual Input")
+            }
+        }
+    )
+}
+
+@Composable
+private fun DiscoveredServiceRow(
+    service: DiscoveredService,
+    enabled: Boolean,
+    onConnect: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = service.name)
+                Text(
+                    text = "${service.host}:${service.port}",
+                    color = Color.Gray,
+                )
+            }
+            Button(onClick = onConnect, enabled = enabled) {
+                Text("Connect")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManualConnectionDialog(
+    isConnecting: Boolean,
+    psk: TextFieldState,
+    onConnect: (String, Int, String) -> Unit,
+    onBack: () -> Unit,
 ) {
     val ip = rememberTextFieldState()
     val portText = rememberTextFieldState("39076")
-    val psk = rememberTextFieldState()
     val focusManager = LocalFocusManager.current
 
     val port = portText.text.toString().toIntOrNull()
@@ -357,7 +476,7 @@ private fun ConnectionDialog(
 
     AlertDialog(
         onDismissRequest = {},
-        title = { Text("Server Settings") },
+        title = { Text("Manual Connection") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -416,6 +535,11 @@ private fun ConnectionDialog(
                 }
             ) {
                 Text("Connect")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onBack, enabled = !isConnecting) {
+                Text("Back")
             }
         }
     )
