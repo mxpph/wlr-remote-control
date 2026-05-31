@@ -25,6 +25,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -104,6 +105,7 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
     var isConnected by remember { mutableStateOf(false) }
     var isConnecting by remember { mutableStateOf(false) }
     var connectionStatus by remember { mutableStateOf("Not connected") }
+    var connectionError by remember { mutableStateOf<String?>(null) }
     var dragSenderJob by remember { mutableStateOf<Job?>(null) }
     var dragSignalChannel by remember { mutableStateOf<Channel<DragSignal>?>(null) }
 
@@ -121,6 +123,9 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
         isConnected = false
         isConnecting = false
         connectionStatus = status
+        if (status != "Not connected" && status != "Disconnected") {
+            connectionError = status
+        }
     }
 
     DisposableEffect(Unit) {
@@ -216,8 +221,11 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
         if (!isConnected) {
             ConnectionDialog(
                 isConnecting = isConnecting,
+                connectionError = connectionError,
+                onDismissError = { connectionError = null },
                 onConnect = { ip, port, psk ->
                     isConnecting = true
+                    connectionError = null
                     connectionStatus = "Connecting..."
                     scope.launch {
                         stopDragSender()
@@ -231,6 +239,7 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
                                 isConnected = false
                                 isConnecting = false
                                 connectionStatus = result.message
+                                connectionError = result.message
                             }
                         }
                     }
@@ -373,6 +382,8 @@ fun PasswordTextField(state: TextFieldState, enabled: Boolean = true) {
 @Composable
 private fun ConnectionDialog(
     isConnecting: Boolean,
+    connectionError: String?,
+    onDismissError: () -> Unit,
     onConnect: (String, Int, String) -> Unit
 ) {
     val psk = rememberTextFieldState()
@@ -386,6 +397,8 @@ private fun ConnectionDialog(
     if (showManual) {
         ManualConnectionDialog(
             isConnecting = isConnecting,
+            connectionError = connectionError,
+            onDismissError = onDismissError,
             psk = psk,
             onConnect = onConnect,
             onBack = onBackToDiscovery
@@ -393,6 +406,8 @@ private fun ConnectionDialog(
     } else {
         DiscoveryConnectionDialog(
             isConnecting = isConnecting,
+            connectionError = connectionError,
+            onDismissError = onDismissError,
             psk = psk,
             onConnect = onConnect,
             onManual = { showManual = true }
@@ -401,8 +416,45 @@ private fun ConnectionDialog(
 }
 
 @Composable
+private fun ConnectionErrorBanner(
+    error: String?,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (error != null) {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.error_24px),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Text(
+                    text = error,
+                    modifier = Modifier.weight(1f),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                IconButton(onClick = onDismiss) {
+                    Text("✕", color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DiscoveryConnectionDialog(
     isConnecting: Boolean,
+    connectionError: String?,
+    onDismissError: () -> Unit,
     psk: TextFieldState,
     onConnect: (String, Int, String) -> Unit,
     onManual: () -> Unit,
@@ -416,6 +468,8 @@ private fun DiscoveryConnectionDialog(
         title = { Text("Connect to device") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConnectionErrorBanner(error = connectionError, onDismiss = onDismissError)
+
                 PasswordTextField(state = psk, enabled = !isConnecting)
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -488,6 +542,8 @@ private fun DiscoveredServiceRow(
 @Composable
 private fun ManualConnectionDialog(
     isConnecting: Boolean,
+    connectionError: String?,
+    onDismissError: () -> Unit,
     psk: TextFieldState,
     onConnect: (String, Int, String) -> Unit,
     onBack: () -> Unit,
@@ -504,6 +560,8 @@ private fun ManualConnectionDialog(
         title = { Text("Manual Connection") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConnectionErrorBanner(error = connectionError, onDismiss = onDismissError)
+
                 OutlinedTextField(
                     state = ip,
                     label = { Text("IP Address (v4 or v6)") },
