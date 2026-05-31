@@ -1,5 +1,6 @@
 package com.example.wlr_remote_control.ui
 
+import android.content.pm.ApplicationInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -41,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,6 +67,7 @@ import androidx.compose.ui.text.style.TextAlign
 import com.example.wlr_remote_control.R
 import com.example.wlr_remote_control.network.DiscoveredService
 import com.example.wlr_remote_control.network.WlrDtlsClient
+import com.example.wlr_remote_control.network.WlrDtlsClient.DTLSOperationResult
 import com.example.wlr_remote_control.network.rememberDiscoveredServices
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -91,7 +94,11 @@ private sealed interface DragSignal {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
-    val dtlsClient = remember { WlrDtlsClient() }
+    val context = LocalContext.current
+    val enablePacketLogging = remember(context) {
+        context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+    }
+    val dtlsClient = remember(enablePacketLogging) { WlrDtlsClient(enablePacketLogging) }
     val scope = rememberCoroutineScope()
 
     var isConnected by remember { mutableStateOf(false) }
@@ -128,10 +135,12 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
 
     fun sendMouseButton(button: Button, buttonState: ButtonState) {
         scope.launch(Dispatchers.IO) {
-            val success = dtlsClient.sendMousePacket(0, 0, button.code, buttonState.ordinal)
-            if (!success) {
+            when (val result = dtlsClient.sendMousePacket(0, 0, button.code, buttonState.ordinal)) {
+                DTLSOperationResult.Success -> Unit
+                is DTLSOperationResult.Failure -> {
                 withContext(Dispatchers.Main) {
-                    disconnect("Connection lost")
+                        disconnect(result.message)
+                    }
                 }
             }
         }
@@ -164,12 +173,14 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
                 accDx -= sendDx
                 accDy -= sendDy
                 if (running && (sendDx != 0 || sendDy != 0)) {
-                    val sent = dtlsClient.sendMousePacket(sendDx, sendDy, 0, 0)
-                    if (!sent) {
-                        withContext(Dispatchers.Main) {
-                            disconnect("Connection lost")
+                    when (val result = dtlsClient.sendMousePacket(sendDx, sendDy, 0, 0)) {
+                        DTLSOperationResult.Success -> Unit
+                        is DTLSOperationResult.Failure -> {
+                            withContext(Dispatchers.Main) {
+                                disconnect(result.message)
+                            }
+                            running = false
                         }
-                        running = false
                     }
                 }
             }
@@ -210,13 +221,17 @@ fun WlrRemoteControlApp(modifier: Modifier = Modifier) {
                     connectionStatus = "Connecting..."
                     scope.launch {
                         stopDragSender()
-                        val connected = dtlsClient.connect(ip, port, psk)
-                        isConnected = connected
-                        isConnecting = false
-                        connectionStatus = if (connected) {
-                            "Connected to $ip:$port"
-                        } else {
-                            "Failed to connect"
+                        when (val result = dtlsClient.connect(ip, port, psk)) {
+                            DTLSOperationResult.Success -> {
+                                isConnected = true
+                                isConnecting = false
+                                connectionStatus = "Connected to $ip:$port"
+                            }
+                            is DTLSOperationResult.Failure -> {
+                                isConnected = false
+                                isConnecting = false
+                                connectionStatus = result.message
+                            }
                         }
                     }
                 }
