@@ -1,4 +1,4 @@
-package com.example.wlr_remote_control.ui.theme
+package io.github.mxpph.wlr_remote_control.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

@@ -1,4 +1,4 @@
-package com.example.wlr_remote_control.network
+package io.github.mxpph.wlr_remote_control.network
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Test

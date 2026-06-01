@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.wlr_remote_control"
+    namespace = "io.github.mxpph.wlr_remote_control"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.wlr_remote_control"
+        applicationId = "io.github.mxpph.wlr_remote_control"
         minSdk = 25
         targetSdk = 36
         versionCode = 1

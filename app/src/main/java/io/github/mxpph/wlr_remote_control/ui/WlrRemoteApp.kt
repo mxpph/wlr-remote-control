@@ -1,4 +1,4 @@
-package com.example.wlr_remote_control.ui
+package io.github.mxpph.wlr_remote_control.ui
 
 import android.content.pm.ApplicationInfo
 import androidx.activity.compose.BackHandler
@@ -65,11 +65,11 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
-import com.example.wlr_remote_control.R
-import com.example.wlr_remote_control.network.DiscoveredService
-import com.example.wlr_remote_control.network.WlrDtlsClient
-import com.example.wlr_remote_control.network.WlrDtlsClient.DTLSOperationResult
-import com.example.wlr_remote_control.network.rememberDiscoveredServices
+import io.github.mxpph.wlr_remote_control.R
+import io.github.mxpph.wlr_remote_control.network.DiscoveredService
+import io.github.mxpph.wlr_remote_control.network.WlrDtlsClient
+import io.github.mxpph.wlr_remote_control.network.WlrDtlsClient.DTLSOperationResult
+import io.github.mxpph.wlr_remote_control.network.rememberDiscoveredServices
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
