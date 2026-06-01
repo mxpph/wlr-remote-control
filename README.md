@@ -1,11 +1,12 @@
 # wlr-remote-control
 
-An Android client for wlr-remote. Remote control your mouse from another device through an encrypted connection with low latency.
+An Android client for [wlr-remote](https://github.com/mxpph/wlr-remote). Remote control your mouse from another device through an encrypted connection with low latency.
 
 ## Build instructions
 
+You will need the Android SDK to build the project.
+
 ```bash
-cd /data/dev/wlr-remote-control
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleDebug
 ```
