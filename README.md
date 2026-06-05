@@ -7,8 +7,7 @@ An Android client for [wlr-remote](https://github.com/mxpph/wlr-remote). Remote 
 You will need the Android SDK to build the project.
 
 ```bash
-./gradlew :app:testDebugUnitTest
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
 ## Usage
